@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type { ToolContract } from "./toolContractTypes.js";
 import { advertisedInputExamples } from "./advertisedInputExamples.js";
+import { compactAdvertisedInputSchema } from "./compactInputSchema.js";
 import { presentInputJsonSchema } from "./inputSchemaPresentation.js";
 import {
   schemaArrays,
@@ -58,6 +59,24 @@ const PROPERTY_DESCRIPTIONS: Readonly<Record<string, string>> = {
 
 type JsonSchemaProjection = z.ZodType["~standard"]["jsonSchema"]["input"];
 
+/**
+ * Largest self-contained input schema advertised in full. Inline projection
+ * repeats every reused definition, so a contract that embeds large captured
+ * observations (compare_web_captures: ~166 KB, 31 levels) can exceed what MCP
+ * clients accept and make the whole connector unusable. Every other tool is
+ * below ~31 KB; schemas above this bound use the reduced root-property form
+ * while the registered canonical schema keeps validating complete inputs.
+ */
+const FULL_INPUT_SCHEMA_MAX_BYTES = 64 * 1024;
+
+const boundedAdvertisedInput = (
+  schema: Record<string, unknown>,
+): Record<string, unknown> =>
+  Buffer.byteLength(JSON.stringify(schema), "utf8") <=
+  FULL_INPUT_SCHEMA_MAX_BYTES
+    ? schema
+    : compactAdvertisedInputSchema(schema, FULL_INPUT_SCHEMA_MAX_BYTES).schema;
+
 /** Attach caller guidance to a canonical schema for the SDK wire projection. */
 export const toolInputSchemaWithMetadata = <Contract extends ToolContract>(
   contract: Contract,
@@ -75,7 +94,9 @@ export const toolInputSchemaWithMetadata = <Contract extends ToolContract>(
         // Keep advertised parameters self-contained for clients that do not
         // resolve local references. The registered canonical schema remains
         // responsible for runtime validation.
-        ...presentInputJsonSchema(inline, fallbackPropertyDescription),
+        ...boundedAdvertisedInput(
+          presentInputJsonSchema(inline, fallbackPropertyDescription),
+        ),
         ...(examples.length === 0 ? {} : { examples }),
       };
     },
